@@ -1,0 +1,111 @@
+# =============================================================================
+# HRFlow AI — Enterprise Docker Compose Orchestration
+# =============================================================================
+# To launch the full production stack:
+#   docker-compose up --build -d
+#
+# To view container status:
+#   docker-compose ps
+#
+# To run database seeding:
+#   docker-compose exec backend python -m app.seed_demo
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. PostgreSQL Database Service
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: hrflow-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hrflow_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-SecurePassword123!}
+      POSTGRES_DB: ${POSTGRES_DB:-hrflow_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hrflow_user} -d ${POSTGRES_DB:-hrflow_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - hrflow-network
+
+  # ---------------------------------------------------------------------------
+  # 2. FastAPI Backend Application Server
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hrflow-backend
+    restart: always
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-hrflow_user}:${POSTGRES_PASSWORD:-SecurePassword123!}@postgres:5432/${POSTGRES_DB:-hrflow_db}
+      - JWT_SECRET=${JWT_SECRET:-hrflow-super-secret-production-grade-jwt-key-2026-change-in-production}
+      - AI_PROVIDER=${AI_PROVIDER:-mock}
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_MODEL_NAME=${AI_MODEL_NAME:-gpt-4o-mini}
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-mock}
+      - EMAIL_API_KEY=${EMAIL_API_KEY:-}
+      - EMAIL_SEND_REAL=${EMAIL_SEND_REAL:-false}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
+      - BACKEND_URL=${BACKEND_URL:-http://localhost:8000}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/modules/dashboard-stats || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - hrflow-network
+
+  # ---------------------------------------------------------------------------
+  # 3. React Frontend & Nginx Web Server
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=/api/v1
+        - VITE_APP_NAME=HRFlow AI
+    container_name: hrflow-frontend
+    restart: always
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - hrflow-network
+
+# -----------------------------------------------------------------------------
+# Volumes & Networks
+# -----------------------------------------------------------------------------
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  hrflow-network:
+    driver: bridge
